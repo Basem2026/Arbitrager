@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Arb Bot Web — Dashboard</title>
+  <style>
+    body{font-family:system-ui,Arial;direction:rtl;background:#071026;color:#e6eef6;margin:0;padding:12px}
+    .card{background:#0b1220;padding:12px;border-radius:10px;margin-bottom:12px}
+    input,select,button,textarea{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:#e6eef6;margin:6px 0}
+    button{background:#06b6d4;color:#012;border:none;padding:10px;font-weight:700}
+    .row{display:flex;gap:8px}
+    .col{flex:1}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.03);text-align:center}
+    th{color:#9aa4b2}
+  </style>
+</head>
+<body>
+  <h2>Arb Bot — Dashboard (Demo)</h2>
+
+  <div id="authWrap" class="card">
+    <h3>تسجيل / دخول</h3>
+    <input id="username" placeholder="اسم المستخدم" />
+    <input id="password" type="password" placeholder="كلمة المرور" />
+    <div class="row">
+      <div class="col"><button id="btnRegister">تسجيل</button></div>
+      <div class="col"><button id="btnLogin">تسجيل دخول</button></div>
+    </div>
+    <div id="authMsg"></div>
+  </div>
+
+  <div id="keysWrap" class="card" style="display:none">
+    <h3>مفاتيح المنصات (محفوظة مشفرة)</h3>
+    <p style="color:#9aa4b2">أدخل مفاتيحك لكل منصة تريد استخدامها — سيخزن الخادم المفاتيح مشفّرة (AES). لا تدخل مفاتيح بدون أخذ احتياطات أمنيّة.</p>
+    <textarea id="apisJson" rows="6" placeholder='مثال JSON: {"binance":{"apiKey":"...","secret":"..."},"kucoin":{"apiKey":"...","secret":"...","password":"..."}}'></textarea>
+    <button id="saveKeys">حفظ المفاتيح</button>
+    <div id="keysInfo"></div>
+  </div>
+
+  <div id="controls" class="card" style="display:none">
+    <h3>إعداد البوت وتشغيله</h3>
+    <label>المنصات (مصفوفة JSON)</label>
+    <input id="exchanges" value='["binance","kucoin"]' />
+    <label>الأزواج (CSV)</label>
+    <input id="pairs" value="BTC/USDT,ETH/USDT" />
+    <label>حد أقل فرق % للتنفيذ</label>
+    <input id="minPct" value="0.8" />
+    <label>قيمة كل صفقة (USDT)</label>
+    <input id="tradeUsd" value="50" />
+    <div class="row">
+      <div class="col"><button id="startBot">ابدأ البوت</button></div>
+      <div class="col"><button id="stopBot">أوقف البوت</button></div>
+    </div>
+  </div>
+
+  <div id="ops" class="card" style="display:none">
+    <h3>الفرص المكتشفة (Real-time)</h3>
+    <table id="opTable">
+      <thead><tr><th>زوج</th><th>شراء على</th><th>شراء بسعر</th><th>بيع على</th><th>بيع بسعر</th><th>فرق %</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="logs" class="card" style="display:none">
+    <h3>Log</h3>
+    <div id="logArea" style="height:200px;overflow:auto;background:rgba(0,0,0,0.15);padding:8px"></div>
+  </div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const API_BASE = '';
+  let token = null;
+  const socket = io();
+
+  function log(msg){ const d = document.getElementById('logArea'); d.innerHTML = new Date().toLocaleTimeString() + ' — ' + msg + '<br/>' + d.innerHTML; }
+
+  document.getElementById('btnRegister').onclick = async ()=>{
+    const u = document.getElementById('username').value;
+    const p = document.getElementById('password').value;
+    const res = await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const j = await res.json();
+    document.getElementById('authMsg').innerText = JSON.stringify(j);
+  };
+
+  document.getElementById('btnLogin').onclick = async ()=>{
+    const u = document.getElementById('username').value;
+    const p = document.getElementById('password').value;
+    const res = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const j = await res.json();
+    if(j.token){
+      token = j.token;
+      document.getElementById('authWrap').style.display='none';
+      document.getElementById('keysWrap').style.display='block';
+      document.getElementById('controls').style.display='block';
+      document.getElementById('ops').style.display='block';
+      document.getElementById('logs').style.display='block';
+      // auth socket
+      socket.emit('auth', token);
+      socket.on('opportunity', (data)=>{ addOpportunity(data); log('فرصة: '+JSON.stringify(data)); });
+    } else {
+      document.getElementById('authMsg').innerText = JSON.stringify(j);
+    }
+  };
+
+  document.getElementById('saveKeys').onclick = async ()=>{
+    const apis = document.getElementById('apisJson').value;
+    if(!apis) return alert('enter JSON');
+    try {
+      const parsed = JSON.parse(apis);
+      const res = await fetch('/api/save-keys',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({apis:parsed})});
+      const j = await res.json();
+      document.getElementById('keysInfo').innerText = JSON.stringify(j);
+    } catch (e){ alert('json invalid'); }
+  };
+
+  document.getElementById('startBot').onclick = async ()=>{
+    const exchanges = JSON.parse(document.getElementById('exchanges').value);
+    const pairs = document.getElementById('pairs').value.split(',').map(s=>s.trim());
+    const minPct = parseFloat(document.getElementById('minPct').value);
+    const res = await fetch('/api/start-scanner',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({exchanges,pairs,minPct,interval:6})});
+    const j = await res.json();
+    log('start scanner: '+JSON.stringify(j));
+  };
+
+  document.getElementById('stopBot').onclick = async ()=>{
+    const res = await fetch('/api/stop-scanner',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}});
+    const j = await res.json();
+    log('stop scanner: '+JSON.stringify(j));
+  };
+
+  function addOpportunity(o){
+    const tbody = document.querySelector('#opTable tbody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${o.pair}</td><td>${o.buyOn}</td><td>${o.buyPrice}</td><td>${o.sellOn}</td><td>${o.sellPrice}</td><td>${o.diffPct.toFixed(3)}</td>`;
+    tbody.prepend(tr);
+  }
+
+  socket.on('connect', ()=>{ log('socket connected'); });
+</script>
+</body>
+</html>
